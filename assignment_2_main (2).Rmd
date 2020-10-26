@@ -1,0 +1,637 @@
+---
+title: "MXN600 Assignment 2 Report"
+author: "Malvika Amarnath"
+date: "18/09/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Exploratory Data Analysis
+
+## Loading & Cleaning the Dataset
+
+Before we beginning analysing the data, we must examine the variables in the dataset and determine which should be included in a binomial regression model.
+
+We will remove the first two rows as they seem to contain debug data.
+
+```{r Load Data, echo=T, results='hide', message=F, warning=F}
+rm(list = ls())
+library("tidyverse")
+library("knitr")
+library("reshape2")
+install.packages("lemon")
+library("lemon")
+knit_print.data.frame <- lemon_print
+
+loan_data <- read.csv('final_data_year.csv', colClasses = c("zip_code"="character"))
+loan_data <- loan_data[-c(1,2),]
+```
+
+## Variable Examination
+
+### pub_rec Variable
+
+The pub_rec variable relates to the number of derogatory public records, which can consist of bankruptcies, foreclosures or liens.  Since such a small amount of the dataset actually has beyond 1 derogatory public record, we will exclude rows where there are more than 1.
+
+```{r Clean pub_rec Data}
+pub_rec_occurrences <- table(loan_data["pub_rec"])
+kable(pub_rec_occurrences, col.names=c("Public Records", "Count"))
+loan_data <- loan_data[!(loan_data$pub_rec>1),]
+mean(loan_data[loan_data$pub_rec==0, "repay_fail"])
+mean(loan_data[loan_data$pub_rec==1, "repay_fail"])
+```
+
+We can see that there is quite a large difference between the repay_fail value when the pub_rec value is 0 compared to 1.  Because of this, we should include this variable.
+
+### mortgage_inq_occurrences Variable
+
+The mortgage_inq_occurrences variable relates to the the number of loan enquiries in the last 6 months, excluding auto and mortgage enquiries.  A high number of inquiries insinuates that the customer is heavily seeking out loans, and is generally makes for an unattractive customer.  Few entries in the dataset exceed 7 inquiries, so we will remove them.
+
+```{r clean inq_last_6mths Data}
+mortgage_inq_occurrences <- table(loan_data["inq_last_6mths"])
+mortgage_inq_occurrences
+loan_data <- loan_data[!(loan_data$inq_last_6mths>7),]
+inq_last_6mths_occurrences <- table(loan_data["inq_last_6mths"])
+inq_last_6mths_plot <- ggplot(loan_data, aes(x=X, y=inq_last_6mths, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Inq Last 6 Months Value")
+inq_last_6mths_plot
+```
+
+We can see that the spread of repayment failures grows as the inquiries increases.  This variable will be included.
+
+### delinq_2yrs_occurrences Variable
+
+The delinq_2yrs_occurrences variable counts the number of 30+ days past-due incidences of delinquency in a borrowers' credit file.  This is another situation where the variable is inadequately distributed among the sample.  We will remove the entries exceeding 2 delinquencies in the last 2 years.
+
+```{r clean delinq_2yrs_occurrences Data}
+delinq_2yrs_occurrences <- table(loan_data["delinq_2yrs"])
+kable(delinq_2yrs_occurrences)
+loan_data <- loan_data[!(loan_data$delinq_2yrs>2),]
+delinq_2yrs_occurrences <- table(loan_data["delinq_2yrs"])
+delinq_2yrs_plot <- ggplot(loan_data, aes(x=X, y=delinq_2yrs, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Delinquent in the last 2 years value")
+delinq_2yrs_plot
+mean(loan_data[loan_data$delinq_2yrs==0, "repay_fail"])
+mean(loan_data[loan_data$delinq_2yrs==1, "repay_fail"])
+mean(loan_data[loan_data$delinq_2yrs==2, "repay_fail"])
+```
+
+We can see that the delinq_2yrs variable seems to indicate some amount of change in the repay_fail value.  But it's hard to recommend including it since the distribution has such a long tail.
+
+### home_ownership Variable
+
+The home_ownership variable counts the number of various home ownership sitatuions.  "None" and "Other" are significantly under-represented, and should be excluded from the analysis.
+
+```{r clean home_ownership Data}
+get_average_repay_fail_of_column_with_labels <- function(column_to_examine) {
+  unique_col_names <- unique(column_to_examine)
+  unique_col_names_list <- as.list(levels(unique_col_names))
+  list_of_means = list()
+  index = 1
+  
+  for (length in unique_col_names_list) {
+    list_of_means[index] <- mean(loan_data[column_to_examine == length, "repay_fail"])
+    index = index + 1
+  }
+  names(list_of_means) <- unique_col_names_list
+  return(list_of_means)
+}
+
+home_ownership_occurrences <- table(loan_data["home_ownership"])
+kable(home_ownership_occurrences)
+loan_data <- loan_data[!(loan_data$home_ownership=="NONE" | loan_data$home_ownership=="OTHER"),]
+home_ownership_repay_fail_means <- get_average_repay_fail_of_column_with_labels(loan_data$home_ownership)
+kable(home_ownership_repay_fail_means)
+```
+
+We can see that the home ownership value doesn't seem to affect the repay_fail value.  This is a confusing situation, but regardless, it seems that this variable does not influence whether repay_fail occurs, so it should be excluded.
+
+### purpose Variable
+
+The purpose variable expresses the driving purpose behind the borrowers' intention for the loan.
+
+```{r observe purpose Data, fig.width=12}
+purpose_occurrences <- table(loan_data["purpose"])
+purpose_occurrences_plot <- ggplot(loan_data, aes(purpose, fill=purpose)) +
+  geom_bar() +
+  theme(legend.position="none") +
+  xlab("Purpose") +
+  ylab("Count of Purpose")
+purpose_occurrences_plot
+```
+
+We can see that the purpose variables are reasonably well distributed, although some buckets have very few loans.  Despite these smaller buckets, this is likely a reasonable distribution of the loans in general.
+
+```{r observe purpose vs. repay_fail Data, fig.width=12}
+purpose_and_repay_fail_means <- get_average_repay_fail_of_column_with_labels(loan_data$purpose)
+purpose_and_repay_fail_means_data <- do.call(cbind, purpose_and_repay_fail_means)
+purpose_and_repay_fail_means_data.melt <- melt(purpose_and_repay_fail_means_data)
+purpose_bar_plot <- ggplot(data=purpose_and_repay_fail_means_data.melt, aes(x=Var2, y=value, color=Var2)) +
+  geom_point() +
+  xlab("Purposes for Loan") +
+  ylab("Mean of Repayment Failure") +
+  theme(legend.position="none")
+purpose_bar_plot
+```
+
+We can see that the purpose variable influences the repay_fail value significantly.  For this reason, it should be included.
+
+### loan_funded Variables
+
+The loan_funded variables show how the loans have been funded for the borrowers.  It doesn't intuitively seem to influence whether a borrower will fail their repayment, but we will examine the variables to make sure.
+
+```{r loan_funded vs. repay_fail Data, fig.width=12}
+funded_amnt_plot <- ggplot(loan_data, aes(x=X, y=funded_amnt, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Loan Funded Amount")
+funded_amnt_plot
+funded_amnt_inv_plot <- ggplot(loan_data, aes(x=X, y=funded_amnt_inv, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Loan Funded By Investors Amount")
+funded_amnt_inv_plot
+```
+
+It's clear that the loan_funded variables do not seem to influence whether borrower failed their repayments.  It will not be included.
+
+### dti Variable
+
+The dti value is a ratio calculated using the borrower’s total monthly debt payments on the total debt obligations, excluding mortgage and the requested LC loan, divided by the borrower’s self-reported monthly income.  This should be helpful, but the income is self-reported, which makes it a dubious measure.
+
+```{r dti vs. repay_fail Data, fig.width=12}
+dti_plot <- ggplot(loan_data, aes(x=X, y=dti, color=repay_fail)) + 
+  geom_point() +
+  xlab("Customers") +
+  ylab("DTI Value")
+dti_plot
+```
+
+We can see that the dti value does not seem to have any relationship with the repay_fail value.  This is likely due to the inconsistency created by self-reporting income data.  This variable will be excluded.
+
+### annual_income Variable
+
+The annual income, similar to dti, is self-reported.  We'd expect to see similar issues with this value.
+
+```{r annual_income vs. repay_fail Data, fig.width=12}
+annual_income_plot <- ggplot(loan_data, aes(x=X, y=annual_inc, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Annual Income Value")
+annual_income_plot
+```
+
+As expected, there does not seem to be a relationship between the self-reported annual income and repay_fail value.  This variable will be excluded.
+
+### earliest_cr_line Variable
+
+The earliest_cr_line variable shows us which year the borrower acquired their first line of credit.  It doesn't seem to intuitively represent any relationship with whether the borrowers will fail their current loan's repayment.
+
+```{r earliest_cr_line vs. repay_fail Data, fig.width=12}
+earliest_cr_line_occurrences <- table(loan_data["earliest_cr_line_year"])
+easliest_cr_line_plot <- ggplot(loan_data, aes(x=X, y=earliest_cr_line_year, color=repay_fail)) + geom_point() +
+  xlab("Customers") +
+  ylab("Earliest Credit Line for Customer")
+easliest_cr_line_plot
+```
+
+As expected, there does not seem to be a relationship between these two variables.  This variable will be excluded.
+
+### revol_util Variable
+
+The revol_util variable represents the borrowers' revolving utilization rate of the borrower.  This relates to the amount of the credit line used relative to the total credit available.  It's clear as to what impact this should have on the repay_fail value.
+
+```{r revol_util vs. repay_fail counts}
+revol_util_plot <- ggplot(loan_data, aes(x=X, y=revol_util, color=repay_fail)) + 
+  geom_point() +
+  xlab("Customers") +
+  ylab("Revol Util Value") +
+  theme(axis.text.y = element_blank())
+revol_util_plot
+```
+
+As suggested, this variable doesn't seem to have a strong relationship to repay_fail.
+
+### emp_length Variable
+
+The self-reported employment length variable may have some relationship to the repay_fail value.  Again, it is self-reported, so there are the usual self-reporting issues to address here.
+
+```{r emp_length vs. repay_fail Data, fig.width=12}
+# Heaps of NA's... about 2.5% of the sample.  NA probably means unemployed.
+emp_length_occurrences <- table(loan_data["emp_length"])
+kable(emp_length_occurrences)
+# It seems pretty close regardless, if you ignore the NA field.
+list_of_emp_length_means <- get_average_repay_fail_of_column_with_labels(loan_data$emp_length)
+list_of_emp_length_means
+```
+
+The NA value of employment length seems to significantly move the repay_fail value.  Despite that, only 2.5% of the sample is NA, so it's not worth pursuing the inclusion of this variable.
+
+
+### verification_status Variable
+
+The verification_status variable sounds very interesting.  There are three types of verification: not verified, source verified and verified.  It's unclear exactly how the verification process is conducted.  
+
+Verified implies that verification was provided by a letter of credit, source verified implies that the income source is verified (by some manner) and not verified implies no verification of any sort.
+
+```{r verification_status vs. repay_fail Counts}
+verification_status <- table(loan_data["verification_status"])
+kable(verification_status)
+```
+
+The counts of the verification_status is well distributed.
+
+```{r verification_status vs. repay_fail Data}
+list_of_verification_status_means <- get_average_repay_fail_of_column_with_labels(loan_data$verification_status)
+list_of_verification_status_means
+```
+
+We can see that the verification_status variable doesn't appear to significantly affect the repay_fail value.  It is also odd that the verification_status seems to imply that the verification methods used lead to higher repay_fail values.  Despite this recommendation being out of scope, it appears that the verification methods being used are worse than doing nothing.  This variable won't be included.
+
+### int_rate Variable
+
+The interest rate is arguably the most important factor for a borrower considering to take out a loan.  It's clear that we should examine the affect of the interest rate variable on the repay_fail value.
+
+```{r int_rate counts, fig.width=12}
+int_rate_hist <- ggplot(loan_data, aes(x=loan_data$int_rate)) + 
+  geom_histogram(color="black", fill="cornflowerblue") +
+  geom_vline(aes(xintercept=mean(loan_data$int_rate)), color="black", linetype="dashed", size=1) +
+  ylab("Interest Rate Count") +
+  xlab("Interest Rate Bins (%)")
+int_rate_hist
+```
+
+The counts of the interest rates appears to be reasonably distributed.
+
+```{r int_rate vs. repay_fail Data, render=lemon_print, fig.width=12}
+int_rate_dist <- data.frame(
+  "5 <= int_rate <= 6" = mean(loan_data[loan_data$int_rate>=5 & loan_data$int_rate<=6, "repay_fail"]),
+  "6 <= int_rate <= 7" = mean(loan_data[loan_data$int_rate>=6 & loan_data$int_rate<=7, "repay_fail"]),
+  "7 <= int_rate <= 8" = mean(loan_data[loan_data$int_rate>=7 & loan_data$int_rate<=8, "repay_fail"]),
+  "8 <= int_rate <= 9" = mean(loan_data[loan_data$int_rate>=8 & loan_data$int_rate<=9, "repay_fail"]),
+  "9 <= int_rate <= 10" = mean(loan_data[loan_data$int_rate>=9 & loan_data$int_rate<=10, "repay_fail"]),
+  "10 <= int_rate <= 11" = mean(loan_data[loan_data$int_rate>=10 & loan_data$int_rate<=11, "repay_fail"]),
+  "11 <= int_rate <= 12" = mean(loan_data[loan_data$int_rate>=11 & loan_data$int_rate<=12, "repay_fail"]),
+  "12 <= int_rate <= 13" = mean(loan_data[loan_data$int_rate>=12 & loan_data$int_rate<=13, "repay_fail"]),
+  "13 <= int_rate <= 14" = mean(loan_data[loan_data$int_rate>=13 & loan_data$int_rate<=14, "repay_fail"]),
+  "14 <= int_rate <= 15" = mean(loan_data[loan_data$int_rate>=14 & loan_data$int_rate<=15, "repay_fail"]),
+  "15 <= int_rate <= 16" = mean(loan_data[loan_data$int_rate>=15 & loan_data$int_rate<=16, "repay_fail"]),
+  "16 <= int_rate <= 17" = mean(loan_data[loan_data$int_rate>=16 & loan_data$int_rate<=17, "repay_fail"]),
+  "17 <= int_rate <= 18" = mean(loan_data[loan_data$int_rate>=17 & loan_data$int_rate<=18, "repay_fail"]),
+  "18 <= int_rate <= 19" = mean(loan_data[loan_data$int_rate>=18 & loan_data$int_rate<=19, "repay_fail"]),
+  "19 <= int_rate <= 20" = mean(loan_data[loan_data$int_rate>=19 & loan_data$int_rate<=20, "repay_fail"]),
+  "int_rate > 20" = mean(loan_data[loan_data$int_rate>20, "repay_fail"])
+)
+int_rate_dist
+```
+
+It's quite clear that the interest rate affects the repay_fail value quite significantly.  This variable will be included.
+
+### inq_last_6_months Variable
+
+The inq_last_6_months variables relate to how many inquiries a credit reporting company has on a borrowers' line of credit, in the last 6 months.  If this number is high, then the borrowers is pursuing many lines of credit, which is likely not a good indicator.
+
+```{r inq_last_6_months Count, fig.width=12}
+mortgage_inq_occurrences <- table(loan_data["inq_last_6mths"])
+inq_occurrences_plot <- ggplot(loan_data, aes(inq_last_6mths, color=inq_last_6mths)) +
+  geom_bar() +
+  theme(legend.position="none") +
+  xlab("Inquiries in the last 6 Months") +
+  ylab("Count of Inquiries")
+inq_occurrences_plot
+```
+
+The amount of inquiries drop off quite quickly.  We will exclude any borrowers 7 or beyond.
+
+```{r inq_last_6_months vs repay_fail Data, fig.width=12}
+list_of_mortgage_inq_repay_fail_means = list()
+for (mortgage_inq_number in 1:6) {
+  list_of_mortgage_inq_repay_fail_means[mortgage_inq_number] <- mean(loan_data[loan_data$inq_last_6mths > mortgage_inq_number, "repay_fail"])
+}
+list_of_mortgage_inq_repay_fail_means
+
+list_of_mortgage_inq_repay_fail_means_data <- do.call(cbind, list_of_mortgage_inq_repay_fail_means)
+list_of_mortgage_inq_repay_fail_means_data.melt <- melt(list_of_mortgage_inq_repay_fail_means_data)
+mortgage_inq_plot <- ggplot(data=list_of_mortgage_inq_repay_fail_means_data.melt, aes(x=Var2, y=value, color=Var2)) +
+  geom_point() +
+  xlab("# Of Mortgage Inquiries in the Last 6 Months") +
+  ylab("Mean of Repayment Failure") +
+  ylim(0, 1) +
+  theme(legend.position="none")
+mortgage_inq_plot
+```
+
+The trend appears clear, as the inquiries increase, the average repay_fail increases.  This variable will be included.
+
+
+### addr_state Variable
+
+The State that the borrower lives in seems to be quite relevant, as the economic situation of the invidiual states of the United States have very different economic circumstances and situations.
+
+```{r addr_state count, fig.width=12}
+addr_state_occurrences_plot <- ggplot(loan_data, aes(addr_state, fill=addr_state)) +
+  geom_bar() +
+  theme(legend.position="none") +
+  xlab("States (and DC)") +
+  ylab("Count of Borrower's State")
+addr_state_occurrences_plot
+```
+
+The bins for some states are lower, but the count is representative of the United States population, in general.  The biggest states have greater representation.
+
+```{r addr_state vs. repay_fail Data, fig.width=12}
+list_of_addr_state_means <- get_average_repay_fail_of_column_with_labels(loan_data$addr_state)
+# Remove the AA and ZZ values
+cleaned_list_addr_state <- list_of_addr_state_means[-1]
+cleaned_list_addr_state <- cleaned_list_addr_state[-51]
+
+cleaned_list_addr_state_means_data <- do.call(cbind, cleaned_list_addr_state)
+cleaned_list_addr_state_means_data.melt <- melt(cleaned_list_addr_state_means_data)
+addr_state_means_plot <- ggplot(data=cleaned_list_addr_state_means_data.melt, aes(x=Var2, y=value)) +
+  geom_point() +
+  xlab("States (and DC)") +
+  ylab("Mean of Repayment Failure") +
+  theme(legend.position="none") +
+  ylim(0, 1)
+addr_state_means_plot
+```
+
+The state does seem to influence the repay_fail value.  It will be included.
+
+### payment_to_loan_ratio Calculated Value
+
+A relationship can be drawn from examining the ratio made from a customers' payment to their loan amount.
+
+```{r payment_to_loan_ratio examination, fig.width=12}
+loan_data["payment_to_loan_ratio"] <- loan_data$last_pymnt_amnt / loan_data$loan_amnt
+payment_to_loan_ratio_plot <- ggplot(loan_data, aes(x=X, y=payment_to_loan_ratio, color=repay_fail)) + geom_point() +
+  xlab("Borrowers") +
+  ylab("Payment to Loan Ratio")
+payment_to_loan_ratio_plot
+```
+
+With the plot we can see that there is a clear relationship between the payment to loan ratio and the repay_fail value.  Although, this could be largely unhelpful if the sample is too concentrated to the lower values.
+
+```{r payment_to_loan counts}
+payment_to_loan_status <- table(loan_data["payment_to_loan_ratio"] < 0.1)
+kable(payment_to_loan_status)
+```
+
+The sample looks quite healthy.
+
+#### Feedback: The last_pymnt_amnt can only be collected if the loan is given.
+
+There is an inherent issue with this calculated field, the borrower has to be given a loan before this ratio can be calculated.  A solution can be to use the installment variable instead, which represents the installment a customer will be expected to pay before getting the loan.
+
+```{r payment_to_installment_ratio examination, fig.width=12}
+loan_data["payment_to_installment_ratio"] <- loan_data$installment / loan_data$loan_amnt
+payment_to_loan_ratio_plot <- ggplot(loan_data, aes(x=X, y=payment_to_installment_ratio, color=repay_fail)) + geom_point() +
+  xlab("Borrowers") +
+  ylab("Payment to Installment Ratio")
+payment_to_loan_ratio_plot
+
+installment_rate_dist <- data.frame(
+  "0 <= payment_to_installment_ratio <= 0.01" = mean(loan_data[loan_data$payment_to_installment_ratio>=0 & loan_data$payment_to_installment_ratio<=0.01, "repay_fail"]),
+  "0.01 <= payment_to_installment_ratio <= 0.02" = mean(loan_data[loan_data$payment_to_installment_ratio>=0.01 & loan_data$payment_to_installment_ratio<=0.02, "repay_fail"]),
+  "0.02 <= payment_to_installment_ratio <= 0.03" = mean(loan_data[loan_data$payment_to_installment_ratio>=0.02 & loan_data$payment_to_installment_ratio<=0.03, "repay_fail"]),
+  "0.03 <= payment_to_installment_ratio <= 0.04" = mean(loan_data[loan_data$payment_to_installment_ratio>=0.03 & loan_data$payment_to_installment_ratio<=0.04, "repay_fail"]))
+kable(installment_rate_dist)
+```
+
+It appears that there is a relationship between the installment / loan_ammount ratio and the repay_fail value.  This value should be a reasonable substitute for the last_pymnt_amnt variable.
+
+# Model Design
+
+```{r}
+#Loading the necessary packages for Model Design
+
+library(zoo)
+library(plyr)
+install.packages("corrplot")
+library(corrplot)
+library(dplyr)
+library(parallel)
+library(magrittr)
+install.packages("ROSE")
+library(ROSE)
+library(dplyr)
+library(caTools)
+install.packages("ROCR")
+library(ROCR)
+install.packages("caret")
+library(caret)
+install.packages("randomForest")
+library(randomForest)
+library(lubridate)
+library(ggplot2)
+install.packages("memisc")
+library(memisc)
+library(Hmisc)
+install.packages("DHARMa")
+library("DHARMa")
+```
+
+We create our new dataset using the variables chosen from the Exploratory data analysis.
+```{r new dataset}
+#New cleaned dataset with essential variables
+
+trial_data<- dplyr::select(loan_data,"int_rate","purpose","pub_rec","repay_fail","last_pymnt_amnt","payment_to_loan_ratio","inq_last_6mths")
+
+
+
+```
+
+A correlation check for numeric variables
+```{r correlation}
+##Multicolliniearity
+
+num_data<- dplyr::select(trial_data,"int_rate","pub_rec","last_pymnt_amnt","payment_to_loan_ratio","inq_last_6mths")
+numcol <- sapply(num_data,is.numeric)
+pearsoncor <- cor(num_data[numcol], use="complete.obs")
+
+corrplot(pearsoncor, "number")
+
+```
+
+
+
+Choosing between two factor variables which are payment_to_loan_ratio and last_pymnt_amnt. For this, we fit a glm model which contains both the variables. The more significant variable is chosen based on the p-value. 
+
+```{r choosong between factor variables}
+PLR.fit<- glm(repay_fail ~ int_rate+purpose+pub_rec+repay_fail+payment_to_loan_ratio+last_pymnt_amnt+inq_last_6mths,  family = "binomial" , trial_data)
+
+summary(PLR.fit)
+```
+
+It appears that the p-value for payment_to_loan_ratio(< 2e-16) is significant and a better choice when compared to last_pymnt_amnt(0.00185). Hence, we get rid of the last_pymnt_amnt variable in our final dataset.
+```{r deleting last_pymnt_amnt}
+index1 <- which(colnames(trial_data)=="last_pymnt_amnt")
+final_data <- trial_data[,-c(index1)]
+#final_data
+table(final_data$repay_fail)
+
+```
+Sampling Data set
+The data is highly skewed and needs to be balanced as even a dumb model can perform better for an imbalanced dataset.Hence, we use the method of undersampling to balance the data. 
+```{r data sampling}
+## We undesample the data using ROSE package
+
+samplededdata <- ovun.sample(repay_fail ~ . , 
+                            data=final_data, method = "under", N = 11100, seed = 1)$data
+table(samplededdata$repay_fail)
+
+```
+## Split into Test and Train
+We split the data set into train set and test set with 75% and 25% respectively. We will use the train set to train the model where in the model will learn the input features(variables). The test set will be tested agaist the train set to see how well the model is performing.
+```{r Splitting dataset}
+
+set.seed(101) 
+sample <- sample.split(samplededdata$repay_fail, SplitRatio = .75)
+train <- subset(samplededdata, sample == TRUE)
+test  <- subset(samplededdata, sample == FALSE)
+```
+
+#Modelling with Logistic regression (Binomial regression)
+We fit the model using three different link functions.
+
+Model 1: Using logit link function
+
+```{r M1}
+LogRegL <- glm(repay_fail~., family=binomial(link='logit'), data = train, maxit = 100)
+
+act_valL <- test$repay_fail# target variable
+predicL <- predict(LogRegL,test, type ='response') #target variable predicted by the LogRegL model
+predicL <- ifelse(predicL > 0.5,1,0)
+compareL <- data.frame(actual = act_valL, predicted = predicL)#cost function(compares difference between the actual and predicted value)
+misClasificErrorL <- mean(predicL != act_valL)
+
+
+
+```
+Model 1: Accuracy and Summary
+```{r M1AS}
+print(paste('Accuracy',1-misClasificErrorL))
+summary(LogRegL)
+```
+The accuracy of Model 1 is 77.90% and AIC value is 7709.3
+
+
+Model 1: Residuals plotting using DHARMa package
+```{r M1plot}
+install.packages("DHARMa")
+library("DHARMa")
+res=simulateResiduals(LogRegL)
+plot(res)
+```
+The residuals seems to be on the line and the data seems to be normally distributed.
+
+Model 2: Using probit link function
+```{r M2}
+LogRegP <- glm(repay_fail~., family=binomial(link='probit'), data = train, maxit = 100)
+act_valP <- test$repay_fail
+predicP <- predict(LogRegP,test, type ='response')
+predicP <- ifelse(predicP > 0.5,1,0)
+compareP <- data.frame(actual = act_valP, predicted = predicP)
+misClasificErrorP <- mean(predicP != act_valP)
+```
+Model 2: Accuracy and Summary
+```{r M2AS}
+print(paste('Accuracy',1-misClasificErrorP))
+summary(LogRegP)
+```
+The accuracy of Model 2 is 77.80% and AIC value is 7821.9
+
+
+
+Model 2: Residuals plotting using DHARMa package
+```{r M2plot}
+res=simulateResiduals(LogRegP)
+plot(res)
+```
+
+The residuals seems to be on the line and the data seems to be normally distributed.
+
+Model 3: Using cloglog link function
+```{r M3}
+LogRegC <- glm(repay_fail~., family=binomial(link='cloglog'), data = train, maxit = 100)
+
+
+act_valC <- test$repay_fail
+
+predicC <- predict(LogRegC,test, type ='response')
+predicC <- ifelse(predicC > 0.5,1,0)
+compareC <- data.frame(actualC = act_valC, predicted = predicC)
+misClasificErrorC <- mean(predicC != act_valC)
+
+
+```
+Model 3: Accuracy and Summary
+```{r M3AS}
+print(paste('Accuracy',1-misClasificErrorC))
+summary(LogRegC)
+```
+The accuracy of Model 3 is 77.94% and AIC value is 7697.1
+
+Model 2: Residuals plotting using DHARMa package
+```{r M3plot}
+res=simulateResiduals(LogRegC)
+plot(res)
+```
+
+
+The 3 models are compared using goodness of fit test based on their AIC, BIC, and logliklihood values.
+
+```{r GOF test}
+
+##Goddness of fit test
+
+#Create a list containing fitted model objects:
+model.list <- list(
+  "M1" = LogRegL,
+  "M2" = LogRegP,
+  "M3" = LogRegC
+  
+)
+#Calculate three measures of fit:
+
+logLiks <- sapply(model.list,FUN = logLik)
+aics <- sapply(model.list,FUN = AIC)
+bics <- sapply(model.list,FUN = BIC)
+
+#Aggregate measures of fit into a single data-frame for plotting
+plot_data <-
+  data.frame(
+    model = c("M1","M2","M3"),
+    aic = aics,
+    bic = bics,
+    logL = logLiks
+  )
+#Display table with measures:
+knitr::kable(plot_data,row.names = FALSE,
+             col.names = c("Model","AIC","BIC","log-Likelihood"))
+
+```
+The model with the lowest AIC and BIC values and the highest logliklihood value is chosen. Model 3 which uses the cloglog unction performs the best according to the above table with an accuracy of 77.94%  greater than the other two models.
+
+
+##ROC Curve
+The evaluation of Model 3 (chosen model) is done through the ROC curve and it will help predict the best threshold value.
+
+```{r}
+#ROC Curve
+value <- as.numeric(paste0(predicC))
+predObj <- prediction(value,act_valC)
+rocObj <- performance(predObj, measure="tpr", x.measure="fpr") 
+aucObj <- performance(predObj, measure="auc")
+
+plot(rocObj, col = "blue", lwd = 1, main = "ROC Curve for Model3 (using cloglog)")
+
+abline(a=0, b=1)
+
+
+```
+
+
+
